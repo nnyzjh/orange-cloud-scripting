@@ -1,9 +1,12 @@
-// Orange Cloud Scripting 版 v1.0.0
+// Orange Cloud Scripting 版 v1.0.1
 // iPhone 上的 Cloudflare 管理客户端（Scripting App，TypeScript + TSX）。
 // 覆盖：账号检测、域名与 DNS（增删改查 + 代理开关）、Workers（列表、详情、部署）、
 // Pages、存储（R2 / D1 / KV）、24 小时流量、WAF 规则集（只读）。
+// v1.0.1：底部 Tab 栏（首页 / 域名 / Workers / 存储 / 流量），首页是指挥台——
+// 问候 + 日期、域名 / Workers / DNS / R2 数量卡片、24 小时请求数、域名列表（字母头像）。
 // 不做：OAuth 登录（改用 API Token，更简单）、实时日志流（WebSocket，Scripting 不支持）、
-// Apple Watch、图表/地图、WAF 规则编辑。
+// Apple Watch、图表/折线图/用量圆环（Scripting 画不了图，横条用线性 ProgressView 代替）、
+// WAF 规则编辑。
 // 令牌只保存在本机钥匙串（和旧版部署脚本同一把钥匙 cf_api_token），
 // 不会打印到日志，也不会上传到别处。
 // 提醒：/user/tokens/verify 返回 401 不代表令牌已死，账号和列表接口能通就是有效。
@@ -11,8 +14,10 @@
 import {
   useState,
   useEffect,
+  useObservable,
   HStack,
   VStack,
+  ZStack,
   Text,
   TextField,
   SecureField,
@@ -23,6 +28,12 @@ import {
   NavigationLink,
   Navigation,
   Script,
+  TabView,
+  Tab,
+  ProgressView,
+  Grid,
+  GridRow,
+  Circle,
 } from "scripting"
 import {
   Account,
@@ -747,6 +758,14 @@ function WorkerListView({
           </NavigationLink>
         ))}
       </Section>
+      <Section header={<Text>Pages</Text>}>
+        <NavigationLink destination={<PagesListView token={token} accountId={accountId} />}>
+          <VStack>
+            <Text>Pages 项目</Text>
+            <Text font="caption">项目列表、最近一次部署状态</Text>
+          </VStack>
+        </NavigationLink>
+      </Section>
       <Section>
         <Text font="caption">点一个 Worker 进去可以看详情、改代码、重新部署（覆盖）。实时日志流（wrangler tail 那种）Scripting 不支持，要看日志去 Cloudflare 面板。</Text>
       </Section>
@@ -1022,29 +1041,149 @@ function AnalyticsView({ token }: { token: string }) {
   )
 }
 
-// ---------- 首页 ----------
+// ---------- 首页（指挥台） ----------
 
-function HomeView() {
-  const [token, setToken] = useState("")
+const WEEKDAYS = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"]
+const AVATAR_COLORS = ["orange", "blue", "green", "purple", "red", "brown"]
+
+function greeting(): string {
+  const h = new Date().getHours()
+  if (h >= 5 && h < 12) return "早上好"
+  if (h >= 12 && h < 18) return "下午好"
+  return "晚上好"
+}
+
+function todayStr(): string {
+  const d = new Date()
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${WEEKDAYS[d.getDay()]}`
+}
+
+function avatarColor(name: string): string {
+  let h = 0
+  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 997
+  return AVATAR_COLORS[h % AVATAR_COLORS.length]
+}
+
+function ZoneAvatar({ name }: { name: string }) {
+  const letter = (name.trim()[0] || "?").toUpperCase()
+  return (
+    <ZStack>
+      <Circle fill={avatarColor(name)} frame={{ width: 36, height: 36 }} />
+      <Text fontWeight="bold" foregroundColor="white">
+        {letter}
+      </Text>
+    </ZStack>
+  )
+}
+
+function StatCell({ label, value }: { label: string; value: number | null }) {
+  return (
+    <VStack alignment="leading">
+      <Text font="caption">{label}</Text>
+      <Text font="title">{value === null ? "…" : fmtNum(value)}</Text>
+    </VStack>
+  )
+}
+
+type HomeProps = {
+  token: string
+  setToken: (v: string) => void
+  accountId: string
+  setAccountId: (v: string) => void
+  accountName: string
+  setAccountName: (v: string) => void
+  accounts: Account[]
+  setAccounts: (v: Account[]) => void
+  subdomain: string
+  setSubdomain: (v: string) => void
+}
+
+function HomeView({
+  token,
+  setToken,
+  accountId,
+  setAccountId,
+  accountName,
+  setAccountName,
+  accounts,
+  setAccounts,
+  subdomain,
+  setSubdomain,
+}: HomeProps) {
   const [tokenSaved, setTokenSaved] = useState(false)
-  const [accountId, setAccountId] = useState("")
-  const [accountName, setAccountName] = useState("")
-  const [accounts, setAccounts] = useState<Account[]>([])
-  const [subdomain, setSubdomain] = useState("")
   const [detectLines, setDetectLines] = useState<string[]>([])
   const [detecting, setDetecting] = useState(false)
+  const [zones, setZones] = useState<Zone[]>([])
+  const [zoneCount, setZoneCount] = useState<number | null>(null)
+  const [workerCount, setWorkerCount] = useState<number | null>(null)
+  const [dnsCount, setDnsCount] = useState<number | null>(null)
+  const [r2Count, setR2Count] = useState<number | null>(null)
+  const [totalRequests, setTotalRequests] = useState<number | null>(null)
+  const [perZoneReq, setPerZoneReq] = useState<Array<{ zone: Zone; requests: number }>>([])
+  const [statsLoading, setStatsLoading] = useState(false)
+  const [statsErr, setStatsErr] = useState("")
+  const [statsKey, setStatsKey] = useState(0)
 
   useEffect(() => {
-    const savedToken = Keychain.get(TOKEN_KEY)
-    if (savedToken) {
-      setToken(savedToken)
-      setTokenSaved(true)
-    }
-    const savedAccount = Keychain.get(ACCOUNT_KEY)
-    if (savedAccount) setAccountId(savedAccount)
-    const savedSubdomain = Keychain.get(SUBDOMAIN_KEY)
-    if (savedSubdomain) setSubdomain(savedSubdomain)
+    if (Keychain.get(TOKEN_KEY)) setTokenSaved(true)
   }, [])
+
+  // 指挥台数据：域名数、Workers 数、DNS 总数、R2 桶数、24 小时请求数。
+  // 每个接口单独兜底，某个失败不影响其他数字。
+  useEffect(() => {
+    let alive = true
+    if (!token || !accountId) {
+      setZones([])
+      setZoneCount(null)
+      setWorkerCount(null)
+      setDnsCount(null)
+      setR2Count(null)
+      setTotalRequests(null)
+      setPerZoneReq([])
+      return
+    }
+    setStatsLoading(true)
+    setStatsErr("")
+    ;(async () => {
+      try {
+        const z = await listZones(token)
+        if (!alive) return
+        setZones(z)
+        setZoneCount(z.length)
+        const [workers, buckets] = await Promise.all([
+          listWorkers(token, accountId).catch(() => [] as WorkerScript[]),
+          listR2Buckets(token, accountId).catch(() => [] as R2Bucket[]),
+        ])
+        if (!alive) return
+        setWorkerCount(workers.length)
+        setR2Count(buckets.length)
+        const perZone = await Promise.all(
+          z.map(async (zone) => {
+            const [recs, ana] = await Promise.all([
+              listDnsRecords(token, zone.id).catch(() => [] as DnsRecord[]),
+              zoneAnalytics24h(token, zone.id).catch(() => ({ total: 0, points: [] as any[] })),
+            ])
+            return { zone, dns: recs.length, requests: ana.total }
+          })
+        )
+        if (!alive) return
+        setDnsCount(perZone.reduce((s, p) => s + p.dns, 0))
+        setTotalRequests(perZone.reduce((s, p) => s + p.requests, 0))
+        setPerZoneReq(
+          perZone
+            .map((p) => ({ zone: p.zone, requests: p.requests }))
+            .sort((a, b) => b.requests - a.requests)
+        )
+      } catch (e) {
+        if (alive) setStatsErr(errText(e))
+      } finally {
+        if (alive) setStatsLoading(false)
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [token, accountId, statsKey])
 
   function push(line: string) {
     setDetectLines((prev) => [...prev, line])
@@ -1131,9 +1270,88 @@ function HomeView() {
   }
 
   const ready = token.trim().length > 0 && accountId.length > 0
+  const maxReq = perZoneReq.length > 0 ? perZoneReq[0].requests : 0
 
   return (
     <List navigationTitle="Orange Cloud">
+      <Section>
+        <Text font="largeTitle">
+          {greeting()}
+          {accountName ? `，${accountName}` : ""}
+        </Text>
+        <Text font="caption">{todayStr()}</Text>
+        <Text font="caption">
+          {ready
+            ? `当前账号：${accountName || accountId}${subdomain ? ` · ${subdomain}.workers.dev` : ""}`
+            : "先在下面保存令牌并点“开始检测”，拿到账号后指挥台和各页面才能用。"}
+        </Text>
+      </Section>
+
+      {ready ? (
+        <Section
+          header={
+            <Text>
+              {statsLoading ? "概览加载中…" : statsErr ? `概览加载失败：${statsErr}` : "概览"}
+            </Text>
+          }
+        >
+          <Grid alignment="leading" horizontalSpacing={24} verticalSpacing={12}>
+            <GridRow>
+              <StatCell label="域名" value={zoneCount} />
+              <StatCell label="Workers" value={workerCount} />
+            </GridRow>
+            <GridRow>
+              <StatCell label="DNS 记录" value={dnsCount} />
+              <StatCell label="R2 存储桶" value={r2Count} />
+            </GridRow>
+          </Grid>
+          <Button title="刷新概览" action={() => setStatsKey((k) => k + 1)} />
+        </Section>
+      ) : null}
+
+      {ready ? (
+        <Section header={<Text>用量 · 最近 24 小时</Text>}>
+          {totalRequests === null ? (
+            <Text font="caption">加载中…</Text>
+          ) : (
+            <>
+              <Text font="headline">共 {fmtNum(totalRequests)} 次请求</Text>
+              <Text font="caption">横条是各域名请求数的对比（最长那条就是最多的）。没有圆环图：Scripting 画不了图，横条是代替它的。</Text>
+              {maxReq > 0
+                ? perZoneReq.slice(0, 5).map((p) => (
+                    <VStack key={p.zone.id} alignment="leading">
+                      <HStack>
+                        <Text font="caption">{p.zone.name}</Text>
+                        <Text font="caption">{fmtNum(p.requests)} 次</Text>
+                      </HStack>
+                      <ProgressView value={p.requests} total={maxReq} progressViewStyle="linear" />
+                    </VStack>
+                  ))
+                : null}
+            </>
+          )}
+        </Section>
+      ) : null}
+
+      {ready && zones.length > 0 ? (
+        <Section header={<Text>{`域名（${zones.length} 个）`}</Text>}>
+          {zones.map((z) => (
+            <NavigationLink key={z.id} destination={<ZoneDetailView token={token} zone={z} />}>
+              <HStack>
+                <ZoneAvatar name={z.name} />
+                <VStack alignment="leading">
+                  <Text>{z.name}</Text>
+                  <Text font="caption">
+                    {z.status}
+                    {z.planName ? ` · ${z.planName}` : ""}
+                  </Text>
+                </VStack>
+              </HStack>
+            </NavigationLink>
+          ))}
+        </Section>
+      ) : null}
+
       <Section header={<Text>账号</Text>}>
         <SecureField
           title="API Token"
@@ -1167,44 +1385,6 @@ function HomeView() {
         ))}
       </Section>
 
-      <Section header={<Text>管理</Text>}>
-        <NavigationLink destination={<ZoneListView token={token} />}>
-          <VStack>
-            <Text>域名</Text>
-            <Text font="caption">DNS 记录增删改查、代理开关、WAF 规则集</Text>
-          </VStack>
-        </NavigationLink>
-        <NavigationLink
-          destination={<WorkerListView token={token} accountId={accountId} subdomain={subdomain} />}
-        >
-          <VStack>
-            <Text>Workers</Text>
-            <Text font="caption">列表、详情、部署（新建和覆盖）</Text>
-          </VStack>
-        </NavigationLink>
-        <NavigationLink destination={<PagesListView token={token} accountId={accountId} />}>
-          <VStack>
-            <Text>Pages</Text>
-            <Text font="caption">项目列表、最近一次部署状态</Text>
-          </VStack>
-        </NavigationLink>
-        <NavigationLink destination={<StorageView token={token} accountId={accountId} />}>
-          <VStack>
-            <Text>存储</Text>
-            <Text font="caption">R2 存储桶、D1 数据库、KV 命名空间</Text>
-          </VStack>
-        </NavigationLink>
-        <NavigationLink destination={<AnalyticsView token={token} />}>
-          <VStack>
-            <Text>流量</Text>
-            <Text font="caption">最近 24 小时按小时的请求数</Text>
-          </VStack>
-        </NavigationLink>
-        {!ready ? (
-          <Text font="caption">先在上面保存令牌并点“开始检测”，拿到账号后各页面才能用。</Text>
-        ) : null}
-      </Section>
-
       <Section header={<Text>说明</Text>}>
         <Text font="caption">这是 Orange Cloud 的 Scripting 版：不用侧载、不用 OAuth、不用搭回调服务器，令牌直接存在本机钥匙串里。</Text>
         <Text font="caption">不做的功能：实时日志流（Scripting 不支持 WebSocket）、WAF 规则编辑、新建存储桶 / 数据库、跑 SQL——这些去 Cloudflare 面板做。</Text>
@@ -1215,10 +1395,61 @@ function HomeView() {
 }
 
 function App() {
+  const selection = useObservable<number>(0)
+  const [token, setToken] = useState("")
+  const [accountId, setAccountId] = useState("")
+  const [accountName, setAccountName] = useState("")
+  const [accounts, setAccounts] = useState<Account[]>([])
+  const [subdomain, setSubdomain] = useState("")
+
+  useEffect(() => {
+    const savedToken = Keychain.get(TOKEN_KEY)
+    if (savedToken) setToken(savedToken)
+    const savedAccount = Keychain.get(ACCOUNT_KEY)
+    if (savedAccount) setAccountId(savedAccount)
+    const savedSubdomain = Keychain.get(SUBDOMAIN_KEY)
+    if (savedSubdomain) setSubdomain(savedSubdomain)
+  }, [])
+
   return (
-    <NavigationStack>
-      <HomeView />
-    </NavigationStack>
+    <TabView selection={selection}>
+      <Tab title="首页" systemImage="house.fill" value={0}>
+        <NavigationStack>
+          <HomeView
+            token={token}
+            setToken={setToken}
+            accountId={accountId}
+            setAccountId={setAccountId}
+            accountName={accountName}
+            setAccountName={setAccountName}
+            accounts={accounts}
+            setAccounts={setAccounts}
+            subdomain={subdomain}
+            setSubdomain={setSubdomain}
+          />
+        </NavigationStack>
+      </Tab>
+      <Tab title="域名" systemImage="globe" value={1}>
+        <NavigationStack>
+          <ZoneListView token={token} />
+        </NavigationStack>
+      </Tab>
+      <Tab title="Workers" systemImage="bolt.fill" value={2}>
+        <NavigationStack>
+          <WorkerListView token={token} accountId={accountId} subdomain={subdomain} />
+        </NavigationStack>
+      </Tab>
+      <Tab title="存储" systemImage="externaldrive.fill" value={3}>
+        <NavigationStack>
+          <StorageView token={token} accountId={accountId} />
+        </NavigationStack>
+      </Tab>
+      <Tab title="流量" systemImage="chart.bar.fill" value={4}>
+        <NavigationStack>
+          <AnalyticsView token={token} />
+        </NavigationStack>
+      </Tab>
+    </TabView>
   )
 }
 

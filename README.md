@@ -1,24 +1,25 @@
-# Orange Cloud Scripting 版 v1.0.0
+# Orange Cloud Scripting 版 v1.0.1
 
 iPhone 上的 Cloudflare 管理客户端，跑在 **Scripting** App 里。不用侧载（不占 3 个名额）、不用 Xcode 编译、不用 OAuth、不用搭回调服务器——API Token 直接存在本机钥匙串里。
 
 原版 Orange Cloud（App Store 已下架）是原生 App；这是它的 Scripting 重写，只做“管 Cloudflare”这个核心。
 
-## 功能
+## 界面：底部 5 个 Tab
 
-- **账号**：保存 API Token（本机钥匙串）、检测令牌和账号（支持多账号切换）、查 workers.dev 子域名
+- **首页（指挥台）**：问候 + 日期；域名 / Workers / DNS 记录 / R2 存储桶数量卡片（真实接口数字）；最近 24 小时请求总数 + 各域名横条对比；域名列表（彩色字母头像，点进去看 DNS）；下面是账号（粘贴 Token、保存/清除、开始检测、多账号切换）
 - **域名**：域名列表；点进一个域名可以看 DNS 记录、**新建 / 改 / 删记录、开关联代理开关**，还能看 WAF 规则集（只读）
-- **Workers**：列表、详情（创建/修改时间、计费模式、地址）；点进一个 Worker 可以编辑代码、从剪贴板粘贴、从文件选代码、**部署（覆盖）**，部署完实测地址；也能新建 Worker
-- **Pages**：项目列表、生产分支、最近一次部署状态、打开地址
+- **Workers**：列表、详情（创建/修改时间、计费模式、地址）；点进一个 Worker 可以编辑代码、从剪贴板粘贴、从文件选代码、**部署（覆盖）**，部署完实测地址；也能新建 Worker；下面有个 Pages 分区
 - **存储**：R2 存储桶、D1 数据库、KV 命名空间（列表）
 - **流量**：选一个域名，看最近 24 小时按小时的请求数
+
+还没登录时，其他 Tab 会提示先回首页粘贴 Token 并检测。
 
 ## 故意不做的
 
 - **OAuth 登录**：改用 API Token，更简单，不用搭回调服务器
 - **实时日志流**（wrangler tail 那种）：Scripting 不支持 WebSocket，看日志去 Cloudflare 面板
 - **WAF 规则编辑、新建存储桶 / 数据库、跑 SQL**：手机端改这些容易误操作，去 Cloudflare 面板做
-- **Apple Watch、图表、流量地图、灵动岛**：原生 App 才有的东西
+- **Apple Watch、图表、流量地图、灵动岛、用量圆环、折线图**：原生 App 才有的东西；Scripting 画不了图，首页的用量用数字 + 线性横条（ProgressView）代替
 
 ## 安装（手机上）
 
@@ -54,4 +55,5 @@ node tests/cf-api.test.mjs
 
 ## 改动记录
 
+- v1.0.1（2026-11-23）：底部 5 个 Tab（首页 / 域名 / Workers / 存储 / 流量）；首页改成指挥台（问候 + 日期、数量卡片、24 小时请求数 + 横条对比、域名列表字母头像）；Pages 放进 Workers Tab 作一个分区；其余功能不变。
 - v1.0.0（2026-11-23）：首版。全套管理功能；API 层从旧版部署脚本（cloudflare-scripting v3.1）复用并扩展。

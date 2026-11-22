@@ -1,1 +1,1 @@
-{"color":"orange","description":"Cloudflare 手机管理：域名与 DNS、Workers 部署、Pages、R2/D1/KV、24 小时流量。API Token 只存本机钥匙串。","entry":"index.tsx","icon":"cloud.fill","name":"Orange Cloud","runInApp":false,"version":"1.0.0"}
+{"color":"orange","description":"Cloudflare 手机管理：域名与 DNS、Workers 部署、Pages、R2/D1/KV、24 小时流量。API Token 只存本机钥匙串。","entry":"index.tsx","icon":"cloud.fill","name":"Orange Cloud","runInApp":false,"version":"1.0.1"}
